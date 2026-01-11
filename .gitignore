@@ -1,0 +1,9 @@
+# Python cache
+__pycache__/
+
+# IDE settings
+.vscode/
+
+# Data and model weights
+dataset/
+model_weights/
