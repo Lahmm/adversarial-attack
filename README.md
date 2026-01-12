@@ -1,7 +1,7 @@
 # 使用说明
 ---
 ## 1.环境搭建
-本项目使用conda创建并管理环境，之后使用pip现在器安装依赖:
+本项目使用conda创建并管理环境，之后使用pip下载器安装依赖:
 `conda create -n adv-att python=3.10`
 `pip install -r requirements.txt`
 如果读者使用其他方式进行环境创建和管理，本项目所需的主要依赖如下:
