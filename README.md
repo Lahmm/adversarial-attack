@@ -1,32 +1,43 @@
 # 使用说明
 ---
 ## 1.环境搭建
-本项目使用conda创建并管理环境，具体的指令为:
-`conda env create -f environment.yml`
+本项目使用conda创建并管理环境，之后使用pip现在器安装依赖:
+`conda create -n adv-att python=3.10`
+`pip install -r requirements.txt`
 如果读者使用其他方式进行环境创建和管理，本项目所需的主要依赖如下:
 ```
-certifi==2026.1.4
-charset-normalizer==3.4.4
-filelock==3.20.0
-idna==3.11
-jinja2==3.1.6
-markupsafe==3.0.2
+numpy==2.0.1
+sympy==1.14.0
 mpmath==1.3.0
 networkx==3.4.2
-numpy==2.0.1
+jinja2==3.1.6
+markupsafe==3.0.2
 pillow==11.1.0
+tqdm==4.67.1
+typing_extensions==4.15.0
+filelock==3.20.0
 pyyaml==6.0.3
 requests==2.32.5
-sympy==1.14.0
-typing_extensions==4.15.0
 urllib3==2.6.3
-tqdm==4.67.1
+charset-normalizer==3.4.4
+idna==3.11
+certifi==2026.1.4
+colorama==0.4.6
+pysocks==1.7.1
+cffi==2.0.0
+pycparser==2.23
 
+# PyTorch ecosystem (cross-platform declaration)
 torch==2.5.1
 torchvision==0.20.1
 torchaudio==2.5.1
+
 ```
-此外`python`版本为`python=3.10.19`, `cuda`版本为`cuda=11.8`
+此外， `cuda`版本为`cuda=11.8`
+```
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+  --index-url https://download.pytorch.org/whl/cu118
+```
 
 ---
 ## 2.实践准备工作
