@@ -38,7 +38,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--data-dir", type=str, default="dataset")
-    parser.add_argument("--use-cuda", action="store_true")
     return parser.parse_args()
 
 
@@ -169,7 +168,7 @@ def save_adversarial_images(
 
 
 def attack(args: argparse.Namespace) -> None:
-    device = get_device(args.use_cuda)
+    device = get_device()
 
     test_loader, num_classes = load_dataset(
         args.dataset,

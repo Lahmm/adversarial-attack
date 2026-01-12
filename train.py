@@ -38,7 +38,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--data-dir", type=str, default="dataset")
     parser.add_argument("--save-dir", type=str, default="model_weights")
-    parser.add_argument("--use-cuda", action="store_true")
     parser.add_argument("--pretrained", action="store_true")
     return parser.parse_args()
 
@@ -86,7 +85,7 @@ def train_one_epoch(
 
 
 def train(args: argparse.Namespace) -> str:
-    device = get_device(args.use_cuda)
+    device = get_device()
     os.makedirs(args.data_dir, exist_ok=True)
 
     loader, num_classes = load_dataset(

@@ -6,9 +6,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 
-def get_device(use_cuda: bool = True) -> torch.device:
+def get_device() -> torch.device:
     # 优先使用 CUDA，不可用时回退到 CPU
-    if use_cuda and torch.cuda.is_available():
+    if torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
 
