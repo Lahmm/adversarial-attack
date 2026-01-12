@@ -54,6 +54,6 @@ torchaudio==2.5.1
 | fgsm        | cifar10/resnet18  | `python fgsm.py --model resnet18 --dataset cifar10 --epsilon 0.15 --max-images 50 --save-dir output/fgsm/cifar10_resnet18` |
 | pgd        | cifar10/resnet18    | `python pgd.py --model resnet18 --dataset cifar10 --epsilon 0.2 --alpha 0.05 --steps 50 --max-images 50 --save-dir output/pgd/cifar10_resnet18` |
 
-参数解释详见代码注释
+读者应根据所需数据集和修改对应名称，参数解释详见代码注释
 
 ---
