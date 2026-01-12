@@ -11,6 +11,7 @@ dependencies:
   - certifi=2026.01.04=py310haa95532_0
   - cffi=2.0.0=py310h02ab6af_1
   - charset-normalizer=3.4.4=py310haa95532_0
+  - colorama=0.4.6=py310haa95532_0
   - cuda-cccl=12.9.27=0
   - cuda-cccl_win-64=12.9.27=0
   - cuda-cudart=11.8.89=0
@@ -89,6 +90,7 @@ dependencies:
   - sympy=1.14.0=py310haa95532_1
   - tbb=2021.8.0=h59b6b97_0
   - tk=8.6.15=hf199647_0
+  - tqdm=4.67.1=py310h4442805_1
   - typing_extensions=4.15.0=py310haa95532_0
   - tzdata=2025b=h04d1e81_0
   - ucrt=10.0.22621.0=haa95532_0

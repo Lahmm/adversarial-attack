@@ -18,12 +18,19 @@ DATASET_STATS = {
     "cifar10": ((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 }
 
+
 # 定义命令行参数解析
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Minimal FGSM attack")
-    parser.add_argument("--epsilon", type=float, default=0.031,help="扰动大小设置，默认8/255")
-    parser.add_argument("--max-images", type=int, default=100,help="最大攻击样本数量，默认100，设置为-1则攻击所有正确分类样本")
-    parser.add_argument("--save-dir", type=str, default="output/fgsm/cifar10_resnet18",help="对抗样本保存路径")
+    parser = argparse.ArgumentParser(description="Minimal PGD attack (Linf)")
+    # PGD 约束半径（Linf），与 FGSM 的 epsilon 含义一致
+    parser.add_argument("--epsilon", type=float, default=0.031, help="Linf 约束半径，默认8/255")
+    # PGD 步长（每步更新幅度）
+    parser.add_argument("--alpha", type=float, default=0.007, help="PGD步长，默认约2/255")
+    # PGD 迭代步数
+    parser.add_argument("--steps", type=int, default=50, help="PGD迭代步数，默认10")
+    parser.add_argument("--random-start", action="store_true", help="是否进行随机初始化（默认关闭）")
+    parser.add_argument("--max-images",type=int,default=100,help="最大攻击样本数量，默认100，设置为-1则攻击所有正确分类样本")
+    parser.add_argument("--save-dir",type=str,default="output/pgd/cifar10_resnet18")
     parser.add_argument("--model", type=str, default="resnet18")
     parser.add_argument("--dataset", type=str, default="cifar10")
     parser.add_argument("--weights", type=str, default="")
@@ -34,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-cuda", action="store_true")
     return parser.parse_args()
 
+
 # 组装模型权重路径
 def resolve_weights_path(args: argparse.Namespace) -> str:
     if args.weights:
@@ -43,6 +51,7 @@ def resolve_weights_path(args: argparse.Namespace) -> str:
     filename = f"{dataset_key}_{model_key}.pth"
     return os.path.abspath(os.path.join(args.weights_dir, filename))
 
+
 # 数据集归一化参数获取
 def get_norm_stats(dataset_key: str) -> Tuple[Tuple[float, ...], Tuple[float, ...]]:
     key = dataset_key.strip().lower()
@@ -50,7 +59,8 @@ def get_norm_stats(dataset_key: str) -> Tuple[Tuple[float, ...], Tuple[float, ..
         raise ValueError(f"Unsupported dataset: {dataset_key}")
     return DATASET_STATS[key]
 
-# 规范normalized空间张量范围
+
+# 规范 normalized 空间张量范围
 def build_clamp_tensors(
     mean: Tuple[float, ...], std: Tuple[float, ...], device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -60,7 +70,8 @@ def build_clamp_tensors(
     clamp_max = (1.0 - mean_t) / std_t
     return clamp_min, clamp_max
 
-# 对test数据集进行评估，返回准确率和正确样本索引
+
+# 对 test 数据集进行评估，返回准确率和正确样本索引
 def evaluate(
     model: torch.nn.Module, loader: DataLoader, device: torch.device
 ) -> Tuple[float, List[int]]:
@@ -91,25 +102,50 @@ def evaluate(
     accuracy = correct / max(total, 1)
     return accuracy, correct_indices
 
-# 定义 FGSM 攻击函数
-def fgsm_attack(model: torch.nn.Module,inputs: torch.Tensor,targets: torch.Tensor,epsilon: float,
+
+def pgd_attack(model: torch.nn.Module,inputs: torch.Tensor,targets: torch.Tensor,epsilon: float,alpha: float,steps: int,
+    random_start: bool,
     clamp_min: torch.Tensor,
     clamp_max: torch.Tensor,
-    ) -> torch.Tensor:
+) -> torch.Tensor:
     """
-    fgsm攻击说明
-    攻击输入为：一个白盒模型，目标样本（此处为inputs，以张量形式读入），对应的标签targets，扰动幅度epsilon
-    输出为：对抗样本adv
+    PGD(Linf)
+    输入：白盒模型、inputs、targets、epsilon(半径)、alpha(步长)、steps(迭代步数)、random_start
+    输出：对抗样本 adv（在 normalized 空间中，且满足像素范围与Linf约束）
     """
     model.eval()
-    inputs = inputs.clone().detach().requires_grad_(True) #确保输入可求梯度
-    outputs = model(inputs) # 前向传播，得到模型输出
-    loss = F.cross_entropy(outputs, targets) #通过交叉熵计算损失（真实分类与预测分类之间的差异）
-    model.zero_grad() #清空模型梯度
-    loss.backward() #反向传播，计算输入的梯度
-    adv = inputs + epsilon * inputs.grad.sign() #生成对抗样本
-    adv = torch.max(torch.min(adv, clamp_max), clamp_min)
+
+    #准备干净样本基准 选择随机启动
+    x0 = inputs.detach()
+    if random_start:
+        adv = x0 + torch.empty_like(x0).uniform_(-epsilon, epsilon)
+        adv = torch.max(torch.min(adv, clamp_max), clamp_min)
+    else:
+        adv = x0.clone()
+    # 主迭代循环
+    for _ in range(max(steps, 1)):
+        adv = adv.clone().detach().requires_grad_(True) # 确保对抗样本可求梯度
+
+        outputs = model(adv) #获取模型预测结果
+        loss = F.cross_entropy(outputs, targets) # 计算真实标签与预测标签之间的交叉熵损失
+
+        model.zero_grad()
+        if adv.grad is not None:
+            adv.grad.zero_()
+        loss.backward()
+
+        # 梯度上升（最大化 loss）
+        adv = adv + alpha * adv.grad.sign()
+
+        # 1) 投影到 L∞ ball: ||adv - x0||_∞ <= epsilon
+        delta = torch.clamp(adv - x0, min=-epsilon, max=epsilon)
+        adv = x0 + delta
+
+        # 2) clamp 到合法像素范围（normalized 空间下）
+        adv = torch.max(torch.min(adv, clamp_max), clamp_min)
+
     return adv.detach()
+
 
 
 def save_adversarial_images(
@@ -187,11 +223,21 @@ def attack(args: argparse.Namespace) -> None:
     offset = 0
 
     model.eval()
-    for inputs, targets in tqdm(attack_loader, desc="FGSM", unit="batch"):
+    for inputs, targets in tqdm(attack_loader, desc="PGD", unit="batch"):
         inputs = inputs.to(device)
         targets = targets.to(device)
 
-        adv = fgsm_attack(model, inputs, targets, args.epsilon, clamp_min, clamp_max)
+        adv = pgd_attack(
+            model=model,
+            inputs=inputs,
+            targets=targets,
+            epsilon=args.epsilon,
+            alpha=args.alpha,
+            steps=args.steps,
+            random_start=True,
+            clamp_min=clamp_min,
+            clamp_max=clamp_max,
+        )
 
         with torch.no_grad():
             outputs = model(adv)
@@ -208,7 +254,7 @@ def attack(args: argparse.Namespace) -> None:
 
     adv_acc = correct / max(total, 1)
     asr = 1.0 - adv_acc
-    print(f"FGSM acc: {adv_acc:.4f} ({correct}/{total})")
+    print(f"PGD acc: {adv_acc:.4f} ({correct}/{total})")
     print(f"ASR: {asr:.4f} ({total - correct}/{total})")
     print(f"Saved adversarial images to {os.path.abspath(args.save_dir)}")
 

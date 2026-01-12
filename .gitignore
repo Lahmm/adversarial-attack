@@ -7,3 +7,4 @@ __pycache__/
 # Data and model weights
 dataset/
 model_weights/
+output/
