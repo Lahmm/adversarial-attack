@@ -74,7 +74,7 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
 | Method           | Dataset/Model  | Command |
 |-----------------|----------|---------|
 | vmifgsm | cifar10/resnet18/resnet34  | `python vmifgsm.py --model resnet18 --dataset cifar10 --epsilon 0.031 --alpha 0.007 --steps 10 --decay 1.0 --beta 1.5 --max-images 100 --save-dir output/vmifgsm/cifar10_resnet18 --blackbox-model resnet34` |
-| pgd | mnist/lenet    | `python one-pixel.py --model lenet --dataset mnist --pixels 1 --popsize 400 --iters 100 --F 0.5 --max-images 100 --save-dir output/onepixel/mnist_lenet` |
+| pgd | mnist/lenet    | `python one-pixel.py --model lenet --dataset mnist --pixels 1 --popsize 400 --iters 50 --F 0.5 --max-images 100 --save-dir output/onepixel/mnist_lenet` |
 
 读者应根据所需数据集和修改对应名称，参数解释详见代码注释
 由于VMIFGSM是迁移攻击，使用攻击指令时 **必须添加黑盒模型**，One-pixel模型和数据集固定，无需改动

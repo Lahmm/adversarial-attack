@@ -26,9 +26,9 @@ def parse_args() -> argparse.Namespace:
     # One Pixel / DE 超参（按论文默认设置）
     parser.add_argument("--pixels", type=int, default=1, help="修改像素数量 d，默认1（One Pixel）")
     parser.add_argument("--popsize", type=int, default=400, help="DE 种群规模，默认400")
-    parser.add_argument("--iters", type=int, default=100, help="DE 迭代代数，默认100")
+    parser.add_argument("--iters", type=int, default=50, help="DE 迭代代数，默认50")
     parser.add_argument("--F", type=float, default=0.5, help="DE 缩放系数 F，默认0.5")
-    parser.add_argument("--stop-true-prob",type=float,default=0.05,help="早停阈值：真实类概率低于该值且已误分类则停止（论文 ImageNet 非定向设置）",)
+    parser.add_argument("--stop-true-prob",type=float,default=0.05,help="早停阈值：真实类概率低于该值且已误分类则停止")
     parser.add_argument("--max-images", type=int, default=100, help="最大攻击样本数量，默认100，-1则攻击所有正确分类样本")
     parser.add_argument("--save-dir", type=str, default="output/onepixel/cifar10_resnet18")
     parser.add_argument("--model", type=str, default="resnet18")
@@ -102,30 +102,19 @@ def one_pixel_attack_untargeted(
     targets: torch.Tensor,
     mean: Tuple[float, ...],
     std: Tuple[float, ...],
-    pixels: int,
-    popsize: int,
-    iters: int,
-    F_scale: float,
-    stop_true_prob: float,
-    clamp_min: torch.Tensor,
-    clamp_max: torch.Tensor,
+    pixels: int = 1,
+    popsize: int = 400,
+    iters: int = 50,
+    F_scale: float = 0.5,
+    stop_true_prob: float = 0.05,
+    clamp_min: torch.Tensor = None,
+    clamp_max: torch.Tensor = None,
 ) -> torch.Tensor:
     """
-    One Pixel Attack（非定向，仅基于概率输出），严格遵循论文的 DE 框架与初始化方式：
+    One Pixel Attack (DE, untargeted). All candidate search is done on GPU
+    using batched evaluation of the population for each image.
 
-    1) 编码：每个像素一个 tuple (x, y, r, g, b)，RGB 在 [0,255]
-       多像素攻击为 d 个 tuple 串联，维度 5*d。
-
-    2) 初始化（论文设置）：
-       - 坐标 (x,y)：均匀随机采样
-       - RGB：高斯采样 N(128, 127)，再裁剪到 [0,255]
-
-    3) 差分进化（不使用 crossover）：
-       对个体 j：trial = pop[r1] + F * (pop[r2] - pop[r3])，r1,r2,r3 两两不同且不等于 j
-       若 trial 更优则替换 pop[j]（逐元素 1-1 竞争）。
-
-    4) 适应度（非定向）：
-       以最小化真实类概率 p_true 为目标。为了使用“越大越好”的比较，定义 fitness = -p_true。
+    Fitness: maximize -p_true (i.e., minimize true-class probability).
     """
     model.eval()
     device = inputs.device
@@ -145,9 +134,11 @@ def one_pixel_attack_untargeted(
         for p in range(pixels):
             xi = 5 * p + 0
             yi = 5 * p + 1
-            cand[..., xi] = torch.clamp(cand[..., xi], 0.0, float(w - 1))
-            cand[..., yi] = torch.clamp(cand[..., yi], 0.0, float(h - 1))
-            cand[..., 5 * p + 2 : 5 * p + 5] = torch.clamp(cand[..., 5 * p + 2 : 5 * p + 5], 0.0, 255.0)
+            cand[:, xi] = torch.clamp(cand[:, xi], 0.0, float(w - 1))
+            cand[:, yi] = torch.clamp(cand[:, yi], 0.0, float(h - 1))
+            cand[:, 5 * p + 2 : 5 * p + 5] = torch.clamp(
+                cand[:, 5 * p + 2 : 5 * p + 5], 0.0, 255.0
+            )
         return cand
 
     def init_population() -> torch.Tensor:
@@ -161,24 +152,23 @@ def one_pixel_attack_untargeted(
             pop[:, 5 * p + 2 : 5 * p + 5] = rgb
         return clip_candidate(pop)
 
-    def apply_candidate(x0_norm: torch.Tensor, cand: torch.Tensor) -> torch.Tensor:
+    def apply_candidates(x0_norm: torch.Tensor, cand: torch.Tensor) -> torch.Tensor:
+        n = cand.shape[0]
         x01 = to_unnorm_01(x0_norm)  # (1,C,H,W) in [0,1]
-        x01_adv = x01.clone()
-        for p in range(pixels):
-            x_pos = int(torch.round(cand[5 * p + 0]).item())
-            y_pos = int(torch.round(cand[5 * p + 1]).item())
-            x_pos = max(0, min(w - 1, x_pos))
-            y_pos = max(0, min(h - 1, y_pos))
+        x01_adv = x01.expand(n, -1, -1, -1).clone()
+        idx = torch.arange(n, device=device)
 
-            rgb255 = cand[5 * p + 2 : 5 * p + 5]
-            rgb01 = torch.clamp(rgb255 / 255.0, 0.0, 1.0)
+        for p in range(pixels):
+            x_pos = torch.round(cand[:, 5 * p + 0]).clamp(0, w - 1).long()
+            y_pos = torch.round(cand[:, 5 * p + 1]).clamp(0, h - 1).long()
+            rgb01 = torch.clamp(cand[:, 5 * p + 2 : 5 * p + 5] / 255.0, 0.0, 1.0)
 
             if c == 1:
-                x01_adv[0, 0, y_pos, x_pos] = rgb01[0]
+                x01_adv[idx, 0, y_pos, x_pos] = rgb01[:, 0]
             else:
-                x01_adv[0, 0, y_pos, x_pos] = rgb01[0]
-                x01_adv[0, 1, y_pos, x_pos] = rgb01[1]
-                x01_adv[0, 2, y_pos, x_pos] = rgb01[2]
+                x01_adv[idx, 0, y_pos, x_pos] = rgb01[:, 0]
+                x01_adv[idx, 1, y_pos, x_pos] = rgb01[:, 1]
+                x01_adv[idx, 2, y_pos, x_pos] = rgb01[:, 2]
 
         x01_adv = torch.clamp(x01_adv, 0.0, 1.0)
         x_adv_norm = to_norm(x01_adv)
@@ -186,13 +176,28 @@ def one_pixel_attack_untargeted(
         return x_adv_norm
 
     @torch.no_grad()
-    def fitness_and_stats(x_adv_norm: torch.Tensor, true_y: int) -> Tuple[float, int, float]:
+    def evaluate_population(x0_norm: torch.Tensor, true_y: int, cand: torch.Tensor):
+        x_adv_norm = apply_candidates(x0_norm, cand)
         logits = model(x_adv_norm)
-        prob = F.softmax(logits, dim=1)[0]
-        pred = int(torch.argmax(prob).item())
-        p_true = float(prob[true_y].item())
-        fit = -p_true  # maximize -p_true <=> minimize p_true
-        return fit, pred, p_true
+        prob = F.softmax(logits, dim=1)
+        p_true = prob[:, true_y]
+        preds = prob.argmax(dim=1)
+        fit = -p_true
+        return fit, preds, p_true
+
+    def sample_distinct_indices(n: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        idx = torch.arange(n, device=device)
+        r1 = torch.randint(0, n, (n,), device=device)
+        r2 = torch.randint(0, n, (n,), device=device)
+        r3 = torch.randint(0, n, (n,), device=device)
+        mask = (r1 == idx) | (r2 == idx) | (r3 == idx) | (r1 == r2) | (r1 == r3) | (r2 == r3)
+        while mask.any():
+            count = int(mask.sum().item())
+            r1[mask] = torch.randint(0, n, (count,), device=device)
+            r2[mask] = torch.randint(0, n, (count,), device=device)
+            r3[mask] = torch.randint(0, n, (count,), device=device)
+            mask = (r1 == idx) | (r2 == idx) | (r3 == idx) | (r1 == r2) | (r1 == r3) | (r2 == r3)
+        return r1, r2, r3
 
     adv_batch = inputs.clone()
 
@@ -201,44 +206,33 @@ def one_pixel_attack_untargeted(
         y_true = int(targets[i].item())
 
         pop = init_population()
-        fit_vals = torch.empty((popsize,), device=device)
-
-        best_fit = None
-        best_cand = None
-
-        for j in range(popsize):
-            x_adv = apply_candidate(x0, pop[j])
-            fit, _, _ = fitness_and_stats(x_adv, y_true)
-            fit_vals[j] = fit
-            if best_fit is None or fit > best_fit:
-                best_fit = fit
-                best_cand = pop[j].clone()
+        fit_vals, preds, p_true = evaluate_population(x0, y_true, pop)
+        best_idx = int(torch.argmax(fit_vals).item())
+        best_fit = float(fit_vals[best_idx].item())
+        best_cand = pop[best_idx].clone()
 
         for _ in range(max(iters, 1)):
-            x_best = apply_candidate(x0, best_cand)
-            _, pred_best, p_true_best = fitness_and_stats(x_best, y_true)
-            if (p_true_best <= stop_true_prob) and (pred_best != y_true):
+            _, pred_best, p_true_best = evaluate_population(x0, y_true, best_cand.unsqueeze(0))
+            if (float(p_true_best[0].item()) <= stop_true_prob) and (int(pred_best[0].item()) != y_true):
                 break
 
-            for j in range(popsize):
-                idxs = list(range(popsize))
-                idxs.remove(j)
-                r1, r2, r3 = random.sample(idxs, 3)
+            r1, r2, r3 = sample_distinct_indices(popsize)
+            trial = pop[r1] + F_scale * (pop[r2] - pop[r3])
+            trial = clip_candidate(trial)
 
-                trial = pop[r1] + F_scale * (pop[r2] - pop[r3])
-                trial = clip_candidate(trial)
+            fit_trial, _, _ = evaluate_population(x0, y_true, trial)
+            improve = fit_trial > fit_vals
+            if improve.any():
+                pop[improve] = trial[improve]
+                fit_vals[improve] = fit_trial[improve]
 
-                x_trial = apply_candidate(x0, trial)
-                fit_trial, _, _ = fitness_and_stats(x_trial, y_true)
+            new_best_idx = int(torch.argmax(fit_vals).item())
+            new_best_fit = float(fit_vals[new_best_idx].item())
+            if new_best_fit > best_fit:
+                best_fit = new_best_fit
+                best_cand = pop[new_best_idx].clone()
 
-                if fit_trial > float(fit_vals[j].item()):
-                    pop[j] = trial
-                    fit_vals[j] = fit_trial
-                    if fit_trial > float(best_fit):
-                        best_fit = fit_trial
-                        best_cand = trial.clone()
-
-        adv_batch[i : i + 1] = apply_candidate(x0, best_cand).detach()
+        adv_batch[i : i + 1] = apply_candidates(x0, best_cand.unsqueeze(0)).detach()
 
     return adv_batch.detach()
 
