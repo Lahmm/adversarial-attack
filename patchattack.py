@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--image-size", type=int, default=32)
     parser.add_argument("--patch-type", type=str, default="square")
-    parser.add_argument("--patch-size", type=float, default=0.1)
+    parser.add_argument("--patch-size", type=float, default=0.1, help="对抗块尺寸占比，默认0.1")
     parser.add_argument("--target", type=int, default=0)
     parser.add_argument("--conf-target", type=float, default=0.9)
     parser.add_argument("--max-count", type=int, default=500)
@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1338)
     return parser.parse_args()
 
-
+# 解析模型权重路径
 def resolve_weights_path(args: argparse.Namespace) -> str:
     if args.weights:
         return os.path.abspath(args.weights)
@@ -66,7 +66,7 @@ def build_clamp_tensors(
     clamp_max = (1.0 - mean_t) / std_t
     return clamp_min, clamp_max
 
-
+# 构建测试数据集
 def build_test_dataset(data_dir: str) -> datasets.CIFAR10:
     mean, std = DATASET_STATS["cifar10"]
     transform = transforms.Compose(
@@ -80,7 +80,7 @@ def build_test_dataset(data_dir: str) -> datasets.CIFAR10:
     )
     return test_dataset
 
-
+# 构建攻击数据加载器
 def build_attack_loader(
     dataset: torch.utils.data.Dataset,
     batch_size: int,
@@ -93,7 +93,7 @@ def build_attack_loader(
         num_workers=num_workers,
     )
 
-
+# 构建数据加载器
 def build_loader(
     dataset: torch.utils.data.Dataset,
     batch_size: int,
@@ -111,13 +111,12 @@ def build_loader(
         generator=generator,
     )
 
-
+# 初始化正方形对抗块
 def init_patch_square(image_size: int, patch_size: float) -> Tuple[np.ndarray, Tuple[int, ...]]:
     noise_size = int(image_size * image_size * patch_size)
     noise_dim = max(1, int(noise_size**0.5))
     patch = np.random.rand(1, 3, noise_dim, noise_dim).astype(np.float32)
     return patch, patch.shape
-
 
 def square_transform(
     patch: np.ndarray, data_shape: Tuple[int, ...], patch_shape: Tuple[int, ...], image_size: int
@@ -145,7 +144,7 @@ def square_transform(
     mask[mask != 0] = 1.0
     return x, mask
 
-
+# 提取对抗块
 def extract_patch(masked_patch: np.ndarray, patch_dim: int) -> np.ndarray:
     mask = masked_patch[0, 0] != 0
     ys, xs = np.where(mask)
@@ -155,7 +154,7 @@ def extract_patch(masked_patch: np.ndarray, patch_dim: int) -> np.ndarray:
     x0, x1 = xs.min(), xs.max() + 1
     return masked_patch[:, :, y0:y1, x0:x1]
 
-
+# 保存对抗样本和原始样本对
 def save_pair(
     original: torch.Tensor,
     adversarial: torch.Tensor,
@@ -177,7 +176,7 @@ def save_pair(
     save_image(ori, os.path.join(split_dir, f"{index:06d}_{ori_label}_original.png"))
     save_image(adv, os.path.join(split_dir, f"{index:06d}_{adv_label}_adversarial.png"))
 
-
+# 定义对抗补丁攻击函数
 def attack(
     model: torch.nn.Module,
     x: torch.Tensor,
@@ -190,32 +189,32 @@ def attack(
     max_count: int,
     step_size: float,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    model.eval()
+    model.eval()  # 将模型切换到评估模式，避免训练态的随机性影响攻击效果
     with torch.no_grad():
-        target_prob = F.softmax(model(x), dim=1)[0][target].item()
+        target_prob = F.softmax(model(x), dim=1)[0][target].item()  # 计算目标类别的初始概率
 
-    adv_x = (1 - mask) * x + mask * patch
-    count = 0
+    adv_x = (1 - mask) * x + mask * patch  # 应用对抗补丁生成初始对抗样本
+    count = 0  # 初始化迭代计数器
 
-    while target_prob < conf_target and count < max_count:
-        count += 1
-        adv_x = adv_x.clone().detach().requires_grad_(True)
-        adv_out = model(adv_x)
-        loss = -adv_out[0][target]
-        model.zero_grad()
-        loss.backward()
+    while target_prob < conf_target and count < max_count:  # 当目标概率未达到阈值且未超过最大迭代次数时循环
+        count += 1  # 迭代计数器加一
+        adv_x = adv_x.clone().detach().requires_grad_(True)  # 克隆对抗样本并启用梯度计算
+        adv_out = model(adv_x)  # 计算模型对对抗样本的输出
+        loss = -adv_out[0][target]  # 计算目标类别的负对数概率作为损失
+        model.zero_grad()  # 清零模型梯度
+        loss.backward()  # 反向传播计算梯度
 
-        adv_grad = adv_x.grad.detach()
-        patch = patch - step_size * adv_grad
-        adv_x = (1 - mask) * x + mask * patch
-        adv_x = torch.max(torch.min(adv_x, clamp_max), clamp_min)
+        adv_grad = adv_x.grad.detach()  # 获取对抗样本的梯度
+        patch = patch - step_size * adv_grad  # 更新对抗补丁
+        adv_x = (1 - mask) * x + mask * patch  # 重新应用对抗补丁生成对抗样本
+        adv_x = torch.max(torch.min(adv_x, clamp_max), clamp_min)  # 裁剪对抗样本到合法输入范围
 
         with torch.no_grad():
-            target_prob = F.softmax(model(adv_x), dim=1)[0][target].item()
+            target_prob = F.softmax(model(adv_x), dim=1)[0][target].item()  # 更新目标类别的概率
 
-    return adv_x.detach(), patch.detach()
+    return adv_x.detach(), patch.detach()  # 返回最终对抗样本和对抗补丁
 
-
+# 评估模型在数据集上的准确率
 def evaluate(
     model: torch.nn.Module, loader: DataLoader, device: torch.device
 ) -> Tuple[float, List[int]]:
@@ -246,7 +245,7 @@ def evaluate(
     accuracy = correct / max(total, 1)
     return accuracy, correct_indices
 
-
+# 主攻击流程
 def main() -> None:
     args = parse_args()
     dataset_key = args.dataset.strip().lower()

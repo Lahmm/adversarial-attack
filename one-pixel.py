@@ -95,7 +95,7 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
     accuracy = correct / max(total, 1)
     return accuracy, correct_indices
 
-
+# 定义 One Pixel Attack（无目标）攻击函数
 def one_pixel_attack_untargeted(
     model: torch.nn.Module,
     inputs: torch.Tensor,
@@ -111,130 +111,127 @@ def one_pixel_attack_untargeted(
     clamp_max: torch.Tensor = None,
 ) -> torch.Tensor:
     """
-    One Pixel Attack (DE, untargeted). All candidate search is done on GPU
-    using batched evaluation of the population for each image.
-
-    Fitness: maximize -p_true (i.e., minimize true-class probability).
+    One Pixel Attack（无目标）攻击说明
+    攻击输入为：一个黑盒/仅需前向查询的模型，目标样本（此处为inputs，以张量形式读入），对应的标签targets，
+            数据标准化参数mean/std，以及可修改像素数pixels；搜索超参数包括种群大小popsize、迭代次数iters、
+            差分进化缩放系数F_scale与提前停止阈值stop_true_prob，并通过clamp_min/clamp_max约束输入范围
+    输出为：通过修改少量像素点（默认1个像素）得到的对抗样本adv_batch
     """
-    model.eval()
-    device = inputs.device
-    b, c, h, w = inputs.shape
+    model.eval()  # 设置模型为评估模式，关闭dropout等训练特定行为
+    device = inputs.device  # 获取输入张量所在设备
+    b, c, h, w = inputs.shape  # 获取输入张量的批量大小、通道数、高度和宽度
 
-    mean_t = torch.tensor(mean, device=device).view(1, -1, 1, 1)
-    std_t = torch.tensor(std, device=device).view(1, -1, 1, 1)
+    mean_t = torch.tensor(mean, device=device).view(1, -1, 1, 1)  # 数据集均值张量，用于反归一化
+    std_t = torch.tensor(std, device=device).view(1, -1, 1, 1)  # 数据集标准差张量，用于反归一化
 
     def to_unnorm_01(x_norm: torch.Tensor) -> torch.Tensor:
-        return torch.clamp(x_norm * std_t + mean_t, 0.0, 1.0)
-
+        return torch.clamp(x_norm * std_t + mean_t, 0.0, 1.0)  # 将归一化张量转换回[0,1]范围的图像
     def to_norm(x_01: torch.Tensor) -> torch.Tensor:
-        return (x_01 - mean_t) / std_t
+        return (x_01 - mean_t) / std_t  # 将[0,1]范围的图像转换回归一化张量
 
     def clip_candidate(cand: torch.Tensor) -> torch.Tensor:
-        cand = cand.clone()
-        for p in range(pixels):
-            xi = 5 * p + 0
-            yi = 5 * p + 1
-            cand[:, xi] = torch.clamp(cand[:, xi], 0.0, float(w - 1))
-            cand[:, yi] = torch.clamp(cand[:, yi], 0.0, float(h - 1))
+        cand = cand.clone()  # 克隆候选解，避免修改原始张量
+        for p in range(pixels):  # 遍历每个像素点
+            xi = 5 * p + 0  # x 坐标索引
+            yi = 5 * p + 1  # y 坐标索引
+            cand[:, xi] = torch.clamp(cand[:, xi], 0.0, float(w - 1))  # 限制 x 坐标在图像宽度范围内
+            cand[:, yi] = torch.clamp(cand[:, yi], 0.0, float(h - 1))  # 限制 y 坐标在图像高度范围内
             cand[:, 5 * p + 2 : 5 * p + 5] = torch.clamp(
                 cand[:, 5 * p + 2 : 5 * p + 5], 0.0, 255.0
-            )
-        return cand
-
+            )  # 限制 RGB 通道值在有效范围内
+        return cand  # 返回裁剪后的候选解
     def init_population() -> torch.Tensor:
-        dim = 5 * pixels
-        pop = torch.empty((popsize, dim), device=device)
-        for p in range(pixels):
+        dim = 5 * pixels  # 每个像素点包含5个参数（x坐标、y坐标、R、G、B）
+        pop = torch.empty((popsize, dim), device=device)  # 初始化种群张量
+        for p in range(pixels):  # 遍历每个像素点
             pop[:, 5 * p + 0] = torch.randint(low=0, high=w, size=(popsize,), device=device).float()
             pop[:, 5 * p + 1] = torch.randint(low=0, high=h, size=(popsize,), device=device).float()
             rgb = torch.normal(mean=128.0, std=127.0, size=(popsize, 3), device=device)
             rgb = torch.clamp(rgb, 0.0, 255.0)
             pop[:, 5 * p + 2 : 5 * p + 5] = rgb
-        return clip_candidate(pop)
+        return clip_candidate(pop)  # 返回初始化种群，确保所有候选解合法
 
     def apply_candidates(x0_norm: torch.Tensor, cand: torch.Tensor) -> torch.Tensor:
-        n = cand.shape[0]
-        x01 = to_unnorm_01(x0_norm)  # (1,C,H,W) in [0,1]
-        x01_adv = x01.expand(n, -1, -1, -1).clone()
-        idx = torch.arange(n, device=device)
+        n = cand.shape[0]  # 获取候选解数量
+        x01 = to_unnorm_01(x0_norm)  # 将归一化张量转换回[0,1]范围的图像
+        x01_adv = x01.expand(n, -1, -1, -1).clone()  # 扩展输入图像以匹配候选解数量，并克隆用于修改
+        idx = torch.arange(n, device=device)  # 生成索引张量，用于批量操作
 
-        for p in range(pixels):
-            x_pos = torch.round(cand[:, 5 * p + 0]).clamp(0, w - 1).long()
-            y_pos = torch.round(cand[:, 5 * p + 1]).clamp(0, h - 1).long()
-            rgb01 = torch.clamp(cand[:, 5 * p + 2 : 5 * p + 5] / 255.0, 0.0, 1.0)
+        for p in range(pixels):  # 遍历每个像素点
+            x_pos = torch.round(cand[:, 5 * p + 0]).clamp(0, w - 1).long()  # 计算 x 坐标索引
+            y_pos = torch.round(cand[:, 5 * p + 1]).clamp(0, h - 1).long()  # 计算 y 坐标索引
+            rgb01 = torch.clamp(cand[:, 5 * p + 2 : 5 * p + 5] / 255.0, 0.0, 1.0)  # RGB 通道值归一化到 [0,1]
 
-            if c == 1:
-                x01_adv[idx, 0, y_pos, x_pos] = rgb01[:, 0]
-            else:
-                x01_adv[idx, 0, y_pos, x_pos] = rgb01[:, 0]
-                x01_adv[idx, 1, y_pos, x_pos] = rgb01[:, 1]
-                x01_adv[idx, 2, y_pos, x_pos] = rgb01[:, 2]
+            if c == 1:  # 单通道图像
+                x01_adv[idx, 0, y_pos, x_pos] = rgb01[:, 0]  # 修改单通道图像的像素值
+            else:  # 多通道图像
+                x01_adv[idx, 0, y_pos, x_pos] = rgb01[:, 0]  # 修改 R 通道
+                x01_adv[idx, 1, y_pos, x_pos] = rgb01[:, 1]  # 修改 G 通道
+                x01_adv[idx, 2, y_pos, x_pos] = rgb01[:, 2]  # 修改 B 通道
 
-        x01_adv = torch.clamp(x01_adv, 0.0, 1.0)
-        x_adv_norm = to_norm(x01_adv)
-        x_adv_norm = torch.max(torch.min(x_adv_norm, clamp_max), clamp_min)
-        return x_adv_norm
+        x01_adv = torch.clamp(x01_adv, 0.0, 1.0)  # 限制对抗样本像素值在 [0,1] 范围内
+        x_adv_norm = to_norm(x01_adv)  # 将对抗样本转换回归一化张量
+        x_adv_norm = torch.max(torch.min(x_adv_norm, clamp_max), clamp_min)  # 裁剪对抗样本到合法输入范围
+        return x_adv_norm  # 返回归一化的对抗样本
 
     @torch.no_grad()
     def evaluate_population(x0_norm: torch.Tensor, true_y: int, cand: torch.Tensor):
-        x_adv_norm = apply_candidates(x0_norm, cand)
-        logits = model(x_adv_norm)
-        prob = F.softmax(logits, dim=1)
-        p_true = prob[:, true_y]
-        preds = prob.argmax(dim=1)
-        fit = -p_true
-        return fit, preds, p_true
-
+        x_adv_norm = apply_candidates(x0_norm, cand)  # 应用候选解生成对抗样本
+        logits = model(x_adv_norm)  # 计算模型对对抗样本的输出
+        prob = F.softmax(logits, dim=1)  # 计算预测概率分布
+        p_true = prob[:, true_y]  # 获取真实类别的预测概率
+        preds = prob.argmax(dim=1)  # 获取预测类别
+        fit = -p_true  # 适应度为真实类别概率的负值，目标是降低该概率
+        return fit, preds, p_true  # 返回适应度、预测类别和真实类别概率
     def sample_distinct_indices(n: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        idx = torch.arange(n, device=device)
-        r1 = torch.randint(0, n, (n,), device=device)
-        r2 = torch.randint(0, n, (n,), device=device)
-        r3 = torch.randint(0, n, (n,), device=device)
+        idx = torch.arange(n, device=device)  # 生成索引张量，用于批量操作
+        r1 = torch.randint(0, n, (n,), device=device)  # 随机索引 1
+        r2 = torch.randint(0, n, (n,), device=device)  # 随机索引 2
+        r3 = torch.randint(0, n, (n,), device=device)  # 随机索引 3
         mask = (r1 == idx) | (r2 == idx) | (r3 == idx) | (r1 == r2) | (r1 == r3) | (r2 == r3)
-        while mask.any():
+        while mask.any():  # 重新采样，确保索引互不相同
             count = int(mask.sum().item())
             r1[mask] = torch.randint(0, n, (count,), device=device)
             r2[mask] = torch.randint(0, n, (count,), device=device)
             r3[mask] = torch.randint(0, n, (count,), device=device)
             mask = (r1 == idx) | (r2 == idx) | (r3 == idx) | (r1 == r2) | (r1 == r3) | (r2 == r3)
-        return r1, r2, r3
+        return r1, r2, r3  # 返回三个互不相同的随机索引
 
-    adv_batch = inputs.clone()
+    adv_batch = inputs.clone()  # 克隆输入张量，作为对抗样本批次的初始值
 
-    for i in range(b):
-        x0 = inputs[i : i + 1].detach()
-        y_true = int(targets[i].item())
+    for i in range(b):  # 遍历批次中的每个样本
+        x0 = inputs[i : i + 1].detach()  # 获取当前样本的输入张量
+        y_true = int(targets[i].item())  # 获取当前样本的真实标签
 
-        pop = init_population()
-        fit_vals, preds, p_true = evaluate_population(x0, y_true, pop)
-        best_idx = int(torch.argmax(fit_vals).item())
-        best_fit = float(fit_vals[best_idx].item())
-        best_cand = pop[best_idx].clone()
+        pop = init_population()  # 初始化种群
+        fit_vals, preds, p_true = evaluate_population(x0, y_true, pop)  # 评估种群适应度
+        best_idx = int(torch.argmax(fit_vals).item())  # 获取适应度最高的个体索引
+        best_fit = float(fit_vals[best_idx].item())  # 获取最高适应度值
+        best_cand = pop[best_idx].clone()  # 克隆最佳个体
 
-        for _ in range(max(iters, 1)):
-            _, pred_best, p_true_best = evaluate_population(x0, y_true, best_cand.unsqueeze(0))
-            if (float(p_true_best[0].item()) <= stop_true_prob) and (int(pred_best[0].item()) != y_true):
-                break
+        for _ in range(max(iters, 1)):  # 遍历最大迭代次数
+            _, pred_best, p_true_best = evaluate_population(x0, y_true, best_cand.unsqueeze(0))  # 评估当前最佳个体
+            if (float(p_true_best[0].item()) <= stop_true_prob) and (int(pred_best[0].item()) != y_true):  # 检查停止条件
+                break  # 满足停止条件，退出循环
 
-            r1, r2, r3 = sample_distinct_indices(popsize)
-            trial = pop[r1] + F_scale * (pop[r2] - pop[r3])
-            trial = clip_candidate(trial)
+            r1, r2, r3 = sample_distinct_indices(popsize)  # 采样三个互不相同的随机索引
+            trial = pop[r1] + F_scale * (pop[r2] - pop[r3])  # 生成试验个体
+            trial = clip_candidate(trial)  # 裁剪试验个体到合法范围
 
-            fit_trial, _, _ = evaluate_population(x0, y_true, trial)
-            improve = fit_trial > fit_vals
-            if improve.any():
-                pop[improve] = trial[improve]
-                fit_vals[improve] = fit_trial[improve]
+            fit_trial, _, _ = evaluate_population(x0, y_true, trial)  # 评估试验个体适应度
+            improve = fit_trial > fit_vals  # 判断试验个体是否优于当前个体
+            if improve.any():  # 如果有改进
+                pop[improve] = trial[improve]  # 更新种群中的个体
+                fit_vals[improve] = fit_trial[improve]  # 更新适应度值
 
-            new_best_idx = int(torch.argmax(fit_vals).item())
-            new_best_fit = float(fit_vals[new_best_idx].item())
-            if new_best_fit > best_fit:
-                best_fit = new_best_fit
-                best_cand = pop[new_best_idx].clone()
+            new_best_idx = int(torch.argmax(fit_vals).item())  # 获取新的最佳个体索引
+            new_best_fit = float(fit_vals[new_best_idx].item())  # 获取新的最佳适应度值
+            if new_best_fit > best_fit:  # 如果新的适应度更好
+                best_fit = new_best_fit  # 更新最佳适应度值
+                best_cand = pop[new_best_idx].clone()  # 更新最佳个体
+        adv_batch[i : i + 1] = apply_candidates(x0, best_cand.unsqueeze(0)).detach()  # 应用最佳个体生成对抗样本
 
-        adv_batch[i : i + 1] = apply_candidates(x0, best_cand.unsqueeze(0)).detach()
-
-    return adv_batch.detach()
+    return adv_batch.detach()  # 返回对抗样本批次
 
 
 def save_adversarial_images(

@@ -102,49 +102,48 @@ def evaluate(
     return accuracy, correct_indices
 
 
-def pgd_attack(model: torch.nn.Module,inputs: torch.Tensor,targets: torch.Tensor,epsilon: float,alpha: float,steps: int,
+def pgd_attack(
+    model: torch.nn.Module,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    epsilon: float,
+    alpha: float,
+    steps: int,
     random_start: bool,
     clamp_min: torch.Tensor,
     clamp_max: torch.Tensor,
 ) -> torch.Tensor:
     """
-    PGD(Linf)
-    输入：白盒模型、inputs、targets、epsilon(半径)、alpha(步长)、steps(迭代步数)、random_start
-    输出：对抗样本 adv（在 normalized 空间中，且满足像素范围与Linf约束）
+    PGD(Linf)攻击说明
+    攻击输入为：一个白盒模型，目标样本（此处为inputs，以张量形式读入），对应的标签targets，扰动预算epsilon，
+            每步步长alpha，迭代次数steps，是否随机初始化random_start，以及输入取值范围clamp_min/clamp_max
+    输出为：在 L∞ 约束下生成的对抗样本adv
     """
-    model.eval()
+    model.eval()  # 设置模型为评估模式，关闭dropout等训练特定行为
 
-    #准备干净样本基准 选择随机启动
-    x0 = inputs.detach()
-    if random_start:
-        adv = x0 + torch.empty_like(x0).uniform_(-epsilon, epsilon)
-        adv = torch.max(torch.min(adv, clamp_max), clamp_min)
+    x0 = inputs.detach()  # 固定原始样本作为参考点，防止后续计算图回溯到原始输入
+    if random_start:  # 是否采用随机起点（增强攻击强度，避免陷入局部最优）
+        adv = x0 + torch.empty_like(x0).uniform_(-epsilon, epsilon)  # 在 L∞ 邻域内随机初始化对抗样本
+        adv = torch.max(torch.min(adv, clamp_max), clamp_min)   # 将初始化样本裁剪到合法输入范围
     else:
-        adv = x0.clone()
-    # 主迭代循环
-    for _ in range(max(steps, 1)):
-        adv = adv.clone().detach().requires_grad_(True) # 确保对抗样本可求梯度
+        adv = x0.clone()  # 不随机初始化时，从原始样本出发
 
-        outputs = model(adv) #获取模型预测结果
-        loss = F.cross_entropy(outputs, targets) # 计算真实标签与预测标签之间的交叉熵损失
+    for _ in range(max(steps, 1)):  # 迭代指定次数进行攻击
+        adv = adv.clone().detach().requires_grad_(True)  # 确保对抗样本可求梯度
+        outputs = model(adv)  # 计算模型对对抗样本的输出
+        loss = F.cross_entropy(outputs, targets)  # 计算交叉熵损失，衡量预测与真实标签的差异
 
-        model.zero_grad()
-        if adv.grad is not None:
-            adv.grad.zero_()
-        loss.backward()
+        model.zero_grad()  # 清空模型梯度
+        if adv.grad is not None:  # 如果对抗样本已有梯度，则清零
+            adv.grad.zero_()  # 清空对抗样本梯度
+        loss.backward()  # 反向传播，计算输入的梯度
 
-        # 梯度上升（最大化 loss）
-        adv = adv + alpha * adv.grad.sign()
+        adv = adv + alpha * adv.grad.sign()  # 沿梯度符号方向更新对抗样本
+        delta = torch.clamp(adv - x0, min=-epsilon, max=epsilon)  # 限制扰动在 L∞ 范围内
+        adv = x0 + delta  # 应用扰动，生成新的对抗样本
+        adv = torch.max(torch.min(adv, clamp_max), clamp_min)  # 裁剪对抗样本到合法输入范围
 
-        # 1) 投影到 L∞ ball: ||adv - x0||_∞ <= epsilon
-        delta = torch.clamp(adv - x0, min=-epsilon, max=epsilon)
-        adv = x0 + delta
-
-        # 2) clamp 到合法像素范围（normalized 空间下）
-        adv = torch.max(torch.min(adv, clamp_max), clamp_min)
-
-    return adv.detach()
-
+    return adv.detach()  # 返回最终生成的对抗样本，断开计算图
 
 
 def save_adversarial_images(
