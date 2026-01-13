@@ -1,5 +1,7 @@
 # 使用说明
 ---
+本项目于用于提供教材第二章对抗样本攻击实践部分的基本代码实现
+---
 ## 1.环境搭建
 本项目使用conda创建并管理环境，之后使用pip下载器安装依赖:
 `conda create -n adv-att python=3.10`
@@ -46,13 +48,9 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
 | Model           | Dataset  | Command |
 |-----------------|----------|---------|
 | resnet18        | cifar10  | `python train.py --model resnet18 --dataset cifar10 --epochs 5 --batch-size 64` |
-| resnet18        | mnist    | `python train.py --model resnet18 --dataset mnist --epochs 5 --batch-size 64` |
 | resnet34        | cifar10  | `python train.py --model resnet34 --dataset cifar10 --epochs 5 --batch-size 64` |
-| resnet34        | mnist    | `python train.py --model resnet34 --dataset mnist --epochs 5 --batch-size 64` |
-| vgg16           | cifar10  | `python train.py --model vgg16 --dataset cifar10 --epochs 5 --batch-size 64` |
-| vgg16           | mnist    | `python train.py --model vgg16 --dataset mnist --epochs 5 --batch-size 64` |
 | densenet121     | cifar10  | `python train.py --model densenet121 --dataset cifar10 --epochs 5 --batch-size 64` |
-| densenet121     | mnist    | `python train.py --model densenet121 --dataset mnist --epochs 5 --batch-size 64` |
+| lenet           | mnist    | `python train.py --model lenet --dataset mnist --epochs 5 --batch-size 64` |
 
 ---
 ## 3.白盒对抗攻击

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models import resnet18, resnet34, vgg16, densenet121
+from torchvision.models import resnet18, resnet34, densenet121
 
 def build_resnet18(num_classes: int, in_channels: int = 3, pretrained: bool = False) -> nn.Module:
     """
@@ -52,71 +52,30 @@ def build_resnet34(num_classes: int, in_channels: int = 3, pretrained: bool = Fa
 
     return model
 
-def build_vgg16(num_classes: int, in_channels: int = 3, pretrained: bool = False) -> nn.Module:
+
+def build_lenet(num_classes: int, in_channels: int = 1, pretrained: bool = False) -> nn.Module:
     """
-    适配 CIFAR10(32x32) / MNIST(28x28) 的 VGG 模型。
+    LeNet-style network for MNIST-sized inputs (28x28).
     """
-    model = vgg16(weights="DEFAULT" if pretrained else None)
+    if pretrained:
+        raise ValueError("LeNet does not support pretrained weights.")
 
-    # 1) 让 VGG 的所有池化在小图输入下不发生尺寸坍塌（尤其 MNIST 28x28）
-    for i, layer in enumerate(model.features):
-        if isinstance(layer, nn.MaxPool2d):
-            model.features[i] = nn.MaxPool2d(
-                kernel_size=layer.kernel_size,
-                stride=layer.stride,
-                padding=layer.padding,
-                dilation=layer.dilation,
-                ceil_mode=True,
-            )
-
-    # 2) 修改第一层卷积以适配输入通道数，并在可能时迁移预训练权重
-    if in_channels != 3:
-        old_conv: nn.Conv2d = model.features[0]
-        new_conv = nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=old_conv.out_channels,
-            kernel_size=old_conv.kernel_size,
-            stride=old_conv.stride,
-            padding=old_conv.padding,
-            bias=(old_conv.bias is not None),
-        )
-
-        with torch.no_grad():
-            if pretrained:
-                # old_conv.weight: [64, 3, 3, 3]
-                w = old_conv.weight
-
-                if in_channels == 1:
-                    # 灰度输入：用 RGB 均值初始化（更稳）
-                    new_conv.weight.copy_(w.mean(dim=1, keepdim=True))
-                else:
-                    # 多通道：循环拷贝，并做缩放保持量级
-                    for c in range(in_channels):
-                        new_conv.weight[:, c:c+1].copy_(w[:, (c % 3):(c % 3) + 1])
-                    new_conv.weight.mul_(3.0 / float(in_channels))
-            else:
-                nn.init.kaiming_normal_(new_conv.weight, mode="fan_out", nonlinearity="relu")
-
-            if new_conv.bias is not None:
-                nn.init.zeros_(new_conv.bias)
-
-        model.features[0] = new_conv
-
-    # 3) 小图分类头：全局池化 + 轻量分类器（避免 ImageNet VGG 的 4096 大头不匹配）
-    model.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-    model.classifier = nn.Sequential(
+    model = nn.Sequential(
+        nn.Conv2d(in_channels, 6, kernel_size=5),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=2, stride=2),
+        nn.Conv2d(6, 16, kernel_size=5),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=2, stride=2),
         nn.Flatten(),
-        nn.Dropout(p=0.5),
-        nn.Linear(512, num_classes),
+        nn.Linear(16 * 4 * 4, 120),
+        nn.ReLU(inplace=True),
+        nn.Linear(120, 84),
+        nn.ReLU(inplace=True),
+        nn.Linear(84, num_classes),
     )
 
-    # 4) 初始化新分类层（无论是否 pretrained，都需要重新训最后层）
-    last_fc: nn.Linear = model.classifier[-1]
-    nn.init.normal_(last_fc.weight, mean=0.0, std=0.01)
-    nn.init.zeros_(last_fc.bias)
-
     return model
-
 
 def build_densenet121(num_classes: int, in_channels: int = 3, pretrained: bool = False) -> nn.Module:
     """
