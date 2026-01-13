@@ -53,30 +53,6 @@ def build_resnet34(num_classes: int, in_channels: int = 3, pretrained: bool = Fa
     return model
 
 
-def build_lenet(num_classes: int, in_channels: int = 1, pretrained: bool = False) -> nn.Module:
-    """
-    LeNet-style network for MNIST-sized inputs (28x28).
-    """
-    if pretrained:
-        raise ValueError("LeNet does not support pretrained weights.")
-
-    model = nn.Sequential(
-        nn.Conv2d(in_channels, 6, kernel_size=5),
-        nn.ReLU(inplace=True),
-        nn.MaxPool2d(kernel_size=2, stride=2),
-        nn.Conv2d(6, 16, kernel_size=5),
-        nn.ReLU(inplace=True),
-        nn.MaxPool2d(kernel_size=2, stride=2),
-        nn.Flatten(),
-        nn.Linear(16 * 4 * 4, 120),
-        nn.ReLU(inplace=True),
-        nn.Linear(120, 84),
-        nn.ReLU(inplace=True),
-        nn.Linear(84, num_classes),
-    )
-
-    return model
-
 def build_densenet121(num_classes: int, in_channels: int = 3, pretrained: bool = False) -> nn.Module:
     """
     适配 CIFAR10(32x32) / MNIST(28x28) 的 DenseNet121。

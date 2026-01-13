@@ -50,7 +50,6 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
 | resnet18        | cifar10  | `python train.py --model resnet18 --dataset cifar10 --epochs 5 --batch-size 64` |
 | resnet34        | cifar10  | `python train.py --model resnet34 --dataset cifar10 --epochs 5 --batch-size 64` |
 | densenet121     | cifar10  | `python train.py --model densenet121 --dataset cifar10 --epochs 5 --batch-size 64` |
-| lenet           | mnist    | `python train.py --model lenet --dataset mnist --epochs 5 --batch-size 64` |
 
 ---
 ## 3.白盒对抗攻击
@@ -74,10 +73,11 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
 | Method           | Dataset/Model  | Command |
 |-----------------|----------|---------|
 | vmifgsm | cifar10/resnet18/resnet34  | `python vmifgsm.py --model resnet18 --dataset cifar10 --epsilon 0.031 --alpha 0.007 --steps 10 --decay 1.0 --beta 1.5 --max-images 100 --save-dir output/vmifgsm/cifar10_resnet18 --blackbox-model resnet34` |
-| pgd | mnist/lenet    | `python one-pixel.py --model lenet --dataset mnist --pixels 1 --popsize 400 --iters 50 --F 0.5 --max-images 100 --save-dir output/onepixel/mnist_lenet` |
+| one-pixel | cifar10/resnet18  | `python one-pixel.py --model resnet18 --dataset cifar10 --pixels 1 --popsize 400 --iters 50 --F 0.5 --max-images 100 --save-dir output/onepixel/cifar10_resnet18` |
+| one-pixel | cifar10/densenet121  | `python one-pixel.py --model densenet121 --dataset cifar10 --pixels 1 --popsize 400 --iters 50 --F 0.5 --max-images 100 --save-dir output/onepixel/cifar10_densenet121` |
 
 读者应根据所需数据集和修改对应名称，参数解释详见代码注释
-由于VMIFGSM是迁移攻击，使用攻击指令时 **必须添加黑盒模型**，One-pixel模型和数据集固定，无需改动
+由于VMIFGSM是迁移攻击，使用攻击指令时 **必须添加黑盒模型**，One-pixel攻击请确保对应模型和数据集已训练获得权重
 
 ---
 ## 5.对抗性补丁攻击

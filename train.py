@@ -8,7 +8,6 @@ import torch.optim as optim
 
 from nets import (
     build_densenet121,
-    build_lenet,
     build_resnet18,
     build_resnet34,
 )
@@ -18,7 +17,6 @@ from utils import get_device, load_dataset
 MODEL_BUILDERS = {
     "resnet18": build_resnet18,
     "resnet34": build_resnet34,
-    "lenet": build_lenet,
     "densenet121": build_densenet121,
 }
 
